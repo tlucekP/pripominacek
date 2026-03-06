@@ -1,0 +1,1 @@
+﻿"""Pripominacek application package."""
