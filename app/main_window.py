@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QCloseEvent, QIcon
+from PySide6.QtGui import QBrush, QCloseEvent, QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Připomínáček")
         self.setWindowIcon(app_icon)
-        self.resize(780, 520)
+        self.resize(860, 640)
 
         self._scheduler = ReminderScheduler(self)
         self._scheduler.reminder_due.connect(self._enqueue_popup)
@@ -70,7 +70,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._sync_initial_settings()
-        self._refresh_table()
+        self._refresh_tables()
         self._update_pause_label()
 
     def attach_tray(self, tray) -> None:
@@ -172,6 +172,32 @@ class MainWindow(QMainWindow):
         self._scheduler.set_reminders(self._settings.reminders)
         self._persist_and_reschedule()
 
+    @staticmethod
+    def apply_popup_result(
+        reminder: Reminder,
+        result_code: int,
+        now: datetime,
+        snooze_minutes: int | None = None,
+        custom_datetime: datetime | None = None,
+    ) -> None:
+        if result_code == ReminderPopupDialog.RESULT_SNOOZE and snooze_minutes is not None:
+            reminder.enabled = True
+            reminder.snooze_until = (now + timedelta(minutes=snooze_minutes)).isoformat(timespec="seconds")
+            return
+
+        if result_code == ReminderPopupDialog.RESULT_RESCHEDULE and custom_datetime is not None:
+            reminder.enabled = True
+            reminder.snooze_until = None
+            reminder.last_fired_at = None
+            reminder.time = custom_datetime.strftime("%H:%M")
+            if reminder.repeat == "once":
+                reminder.once_date = custom_datetime.date().isoformat()
+            return
+
+        if reminder.repeat == "once":
+            reminder.enabled = False
+            reminder.snooze_until = None
+
     def _build_ui(self) -> None:
         root = QWidget(self)
         root_layout = QVBoxLayout(root)
@@ -183,16 +209,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(title)
 
         self._table = QTableWidget(0, 4, self)
-        self._table.setHorizontalHeaderLabels(["Čas", "Text", "Opakování", "Zapnuto"])
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.horizontalHeader().setStretchLastSection(False)
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.itemChanged.connect(self._on_table_item_changed)
+        self._configure_active_table(self._table)
         root_layout.addWidget(self._table)
 
         button_row = QHBoxLayout()
@@ -212,6 +229,18 @@ class MainWindow(QMainWindow):
         button_row.addWidget(self._delete_button)
         button_row.addStretch(1)
         root_layout.addLayout(button_row)
+
+        self._show_past_checkbox = QCheckBox("Zobrazit minulé připomínky")
+        self._show_past_checkbox.toggled.connect(self._history_box_visibility_changed)
+        root_layout.addWidget(self._show_past_checkbox)
+
+        self._history_box = QGroupBox("Minulé připomínky")
+        history_layout = QVBoxLayout(self._history_box)
+        self._history_table = QTableWidget(0, 3, self)
+        self._configure_history_table(self._history_table)
+        history_layout.addWidget(self._history_table)
+        self._history_box.setVisible(False)
+        root_layout.addWidget(self._history_box)
 
         settings_box = QGroupBox("Nastavení")
         settings_layout = QVBoxLayout(settings_box)
@@ -247,6 +276,42 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
 
+    def _configure_active_table(self, table: QTableWidget) -> None:
+        table.setHorizontalHeaderLabels(["Čas", "Text", "Opakování", "Zapnuto"])
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        table.itemChanged.connect(self._on_table_item_changed)
+        table.itemSelectionChanged.connect(lambda: self._clear_selection_on_other_table(self._history_table))
+
+    def _configure_history_table(self, table: QTableWidget) -> None:
+        table.setHorizontalHeaderLabels(["Čas", "Text", "Opakování"])
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        table.itemSelectionChanged.connect(lambda: self._clear_selection_on_other_table(self._table))
+
+    def _clear_selection_on_other_table(self, table: QTableWidget) -> None:
+        sender = self.sender()
+        if not isinstance(sender, QTableWidget) or sender.currentRow() < 0:
+            return
+        table.blockSignals(True)
+        table.clearSelection()
+        table.setCurrentCell(-1, -1)
+        table.blockSignals(False)
+
+    def _history_box_visibility_changed(self, checked: bool) -> None:
+        self._history_box.setVisible(checked)
+
     def _sync_initial_settings(self) -> None:
         if self._autostart.is_supported():
             current_state = self._autostart.is_enabled()
@@ -269,25 +334,68 @@ class MainWindow(QMainWindow):
         self._theme_combo.setCurrentIndex(index)
         self._theme_combo.blockSignals(False)
 
-    def _refresh_table(self) -> None:
+    def _refresh_tables(self) -> None:
+        self._populate_active_table(self._active_reminders())
+        self._populate_history_table(self._past_reminders())
+
+    def _populate_active_table(self, reminders: list[Reminder]) -> None:
         self._table.blockSignals(True)
         self._table.setRowCount(0)
 
-        for row, reminder in enumerate(self._settings.reminders):
+        bold_font = QFont()
+        bold_font.setBold(True)
+        text_font = QFont(bold_font)
+        text_font.setPointSize(16)
+
+        for row, reminder in enumerate(reminders):
             self._table.insertRow(row)
+            items = self._build_row_items(reminder)
+            for column, item in enumerate(items):
+                if item is not None:
+                    item.setFont(text_font if column == 1 else bold_font)
+                    self._table.setItem(row, column, item)
 
-            time_item = QTableWidgetItem(reminder.time)
-            time_item.setData(Qt.ItemDataRole.UserRole, reminder.id)
-            time_item.setFlags(time_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self._table.blockSignals(False)
 
-            text_item = QTableWidgetItem(self._short_text(reminder.text))
-            text_item.setToolTip(reminder.text)
-            text_item.setFlags(text_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    def _populate_history_table(self, reminders: list[Reminder]) -> None:
+        self._history_table.blockSignals(True)
+        self._history_table.setRowCount(0)
 
-            repeat_label = "Jednorázově" if reminder.repeat == "once" else "Denně"
-            repeat_item = QTableWidgetItem(repeat_label)
-            repeat_item.setFlags(repeat_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        base_font = QFont()
+        base_font.setBold(False)
+        base_font.setStrikeOut(True)
+        text_font = QFont(base_font)
+        text_font.setPointSize(16)
+        red_brush = QBrush(QColor("#b00020"))
 
+        for row, reminder in enumerate(reminders):
+            self._history_table.insertRow(row)
+            items = self._build_row_items(reminder, include_enabled=False)
+            for column, item in enumerate(items):
+                if item is None:
+                    continue
+                item.setForeground(red_brush)
+                item.setFont(text_font if column == 1 else base_font)
+                self._history_table.setItem(row, column, item)
+
+        self._history_table.blockSignals(False)
+
+    def _build_row_items(self, reminder: Reminder, include_enabled: bool = True) -> list[QTableWidgetItem | None]:
+        time_item = QTableWidgetItem(reminder.time)
+        time_item.setData(Qt.ItemDataRole.UserRole, reminder.id)
+        time_item.setFlags(time_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+        text_item = QTableWidgetItem(self._short_text(reminder.text))
+        text_item.setToolTip(reminder.text)
+        text_item.setFlags(text_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+        repeat_label = "Jednorázově" if reminder.repeat == "once" else "Denně"
+        repeat_item = QTableWidgetItem(repeat_label)
+        repeat_item.setFlags(repeat_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+        items: list[QTableWidgetItem | None] = [time_item, text_item, repeat_item]
+
+        if include_enabled:
             enabled_item = QTableWidgetItem()
             enabled_item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled
@@ -297,13 +405,25 @@ class MainWindow(QMainWindow):
             enabled_item.setCheckState(
                 Qt.CheckState.Checked if reminder.enabled else Qt.CheckState.Unchecked
             )
+            items.append(enabled_item)
 
-            self._table.setItem(row, 0, time_item)
-            self._table.setItem(row, 1, text_item)
-            self._table.setItem(row, 2, repeat_item)
-            self._table.setItem(row, 3, enabled_item)
+        return items
 
-        self._table.blockSignals(False)
+    def _active_reminders(self) -> list[Reminder]:
+        now = datetime.now()
+        return [
+            reminder
+            for reminder in self._settings.reminders
+            if not ReminderScheduler.is_past_reminder(reminder, now)
+        ]
+
+    def _past_reminders(self) -> list[Reminder]:
+        now = datetime.now()
+        return [
+            reminder
+            for reminder in self._settings.reminders
+            if ReminderScheduler.is_past_reminder(reminder, now)
+        ]
 
     @staticmethod
     def _short_text(raw: str, limit: int = 70) -> str:
@@ -332,7 +452,7 @@ class MainWindow(QMainWindow):
         reminder.enabled = item.checkState() == Qt.CheckState.Checked
         if not reminder.enabled:
             reminder.snooze_until = None
-        self._persist_and_reschedule(refresh_table=False)
+        self._persist_and_reschedule(refresh_tables=False)
 
     def _on_autostart_toggled(self, checked: bool) -> None:
         if not self._autostart.is_supported():
@@ -376,16 +496,17 @@ class MainWindow(QMainWindow):
             return
 
         self._popup_open = True
-        dialog = ReminderPopupDialog(reminder.text, reminder.time, None)
+        dialog = ReminderPopupDialog(reminder, None)
         result = dialog.exec()
 
         now = datetime.now()
-        if result == ReminderPopupDialog.RESULT_SNOOZE:
-            reminder.enabled = True
-            reminder.snooze_until = (now + timedelta(minutes=10)).isoformat(timespec="seconds")
-        elif reminder.repeat == "once":
-            reminder.enabled = False
-            reminder.snooze_until = None
+        self.apply_popup_result(
+            reminder,
+            result,
+            now,
+            snooze_minutes=dialog.snooze_minutes(),
+            custom_datetime=dialog.custom_datetime(),
+        )
 
         self._popup_open = False
         self._persist_and_reschedule()
@@ -393,11 +514,11 @@ class MainWindow(QMainWindow):
 
     def _on_scheduler_data_changed(self) -> None:
         self._save_settings()
-        self._refresh_table()
+        self._refresh_tables()
 
-    def _persist_and_reschedule(self, refresh_table: bool = True) -> None:
-        if refresh_table:
-            self._refresh_table()
+    def _persist_and_reschedule(self, refresh_tables: bool = True) -> None:
+        if refresh_tables:
+            self._refresh_tables()
         self._save_settings()
         self._scheduler.reschedule()
 
@@ -405,10 +526,16 @@ class MainWindow(QMainWindow):
         self._settings_store.save(self._settings)
 
     def _selected_reminder(self) -> Reminder | None:
-        row = self._table.currentRow()
+        reminder = self._selected_reminder_from_table(self._table)
+        if reminder is not None:
+            return reminder
+        return self._selected_reminder_from_table(self._history_table)
+
+    def _selected_reminder_from_table(self, table: QTableWidget) -> Reminder | None:
+        row = table.currentRow()
         if row < 0:
             return None
-        id_item = self._table.item(row, 0)
+        id_item = table.item(row, 0)
         if id_item is None:
             return None
         reminder_id = id_item.data(Qt.ItemDataRole.UserRole)

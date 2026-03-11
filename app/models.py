@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -37,6 +37,13 @@ def _normalize_datetime(value: Any) -> str | None:
     if parsed is None:
         return None
     return parsed.isoformat(timespec="seconds")
+
+
+def _normalize_created_at(value: Any) -> str:
+    normalized = _normalize_datetime(value)
+    if normalized is not None:
+        return normalized
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -89,6 +96,7 @@ class Reminder:
     once_date: str | None = None
     snooze_until: str | None = None
     last_fired_at: str | None = None
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Reminder":
@@ -118,6 +126,7 @@ class Reminder:
             once_date=once_date,
             snooze_until=_normalize_datetime(data.get("snooze_until")),
             last_fired_at=_normalize_datetime(data.get("last_fired_at")),
+            created_at=_normalize_created_at(data.get("created_at")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -130,6 +139,7 @@ class Reminder:
             "once_date": self.once_date if self.repeat == "once" else None,
             "snooze_until": self.snooze_until,
             "last_fired_at": self.last_fired_at,
+            "created_at": self.created_at,
         }
         return payload
 

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
@@ -13,6 +13,7 @@ LOGGER = logging.getLogger(__name__)
 class ReminderScheduler(QObject):
     reminder_due = Signal(str)
     reminders_changed = Signal()
+    HISTORY_RETENTION_DAYS = 30
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -143,32 +144,55 @@ class ReminderScheduler(QObject):
     def _cleanup_state(self, now: datetime) -> bool:
         changed = False
 
-        for reminder in self._reminders:
+        for reminder in list(self._reminders):
             if reminder.snooze_until and parse_iso_datetime(reminder.snooze_until) is None:
                 reminder.snooze_until = None
                 changed = True
 
-            if not reminder.enabled or reminder.repeat != "once":
-                continue
+            if reminder.repeat == "once":
+                due_at = self._once_due_datetime(reminder)
+                if due_at is None:
+                    reminder.enabled = False
+                    reminder.snooze_until = None
+                    changed = True
+                else:
+                    fired_at = parse_iso_datetime(reminder.last_fired_at)
+                    if fired_at and fired_at >= due_at and reminder.snooze_until is None:
+                        reminder.enabled = False
+                        changed = True
+                    elif reminder.snooze_until is None and now > due_at + timedelta(minutes=1):
+                        reminder.enabled = False
+                        changed = True
 
-            due_at = self._once_due_datetime(reminder)
-            if due_at is None:
-                reminder.enabled = False
-                reminder.snooze_until = None
-                changed = True
-                continue
-
-            fired_at = parse_iso_datetime(reminder.last_fired_at)
-            if fired_at and fired_at >= due_at and reminder.snooze_until is None:
-                reminder.enabled = False
-                changed = True
-                continue
-
-            if reminder.snooze_until is None and now > due_at + timedelta(minutes=1):
-                reminder.enabled = False
+            if self.is_past_reminder(reminder, now) and self._should_delete_past_reminder(reminder, now):
+                self._reminders.remove(reminder)
                 changed = True
 
         return changed
+
+    @classmethod
+    def is_past_reminder(cls, reminder: Reminder, now: datetime | None = None) -> bool:
+        if reminder.repeat != "once":
+            return False
+
+        reference_now = now or datetime.now()
+        due_at = cls._once_due_datetime(reminder)
+        if due_at is None or due_at > reference_now:
+            return False
+
+        if reminder.snooze_until is not None:
+            snooze_at = parse_iso_datetime(reminder.snooze_until)
+            if snooze_at is not None and snooze_at > reference_now:
+                return False
+
+        return not reminder.enabled
+
+    @classmethod
+    def _should_delete_past_reminder(cls, reminder: Reminder, now: datetime) -> bool:
+        created_at = parse_iso_datetime(reminder.created_at)
+        if created_at is None:
+            return False
+        return now - created_at >= timedelta(days=cls.HISTORY_RETENTION_DAYS)
 
     @staticmethod
     def _parse_time(raw_value: str):
