@@ -316,6 +316,10 @@ class MainWindow(QMainWindow):
         if self._autostart.is_supported():
             current_state = self._autostart.is_enabled()
             self._settings.autostart = current_state
+            if current_state and not self._autostart.is_current_command():
+                if self._autostart.set_enabled(True):
+                    current_state = self._autostart.is_enabled()
+                    self._settings.autostart = current_state
             self._autostart_checkbox.blockSignals(True)
             self._autostart_checkbox.setChecked(current_state)
             self._autostart_checkbox.blockSignals(False)

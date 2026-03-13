@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -10,13 +11,19 @@ if __package__ in {None, ""}:
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyle
 
-from app.autostart import AutostartManager
+from app.autostart import AUTOSTART_ARGUMENT, AutostartManager
 from app.main_window import MainWindow
 from app.settings_store import SettingsStore
 from app.theme import apply_theme
 from app.tray import TrayController
 
 LOGGER = logging.getLogger(__name__)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(AUTOSTART_ARGUMENT, dest="autostart", action="store_true")
+    return parser.parse_known_args(argv)[0]
 
 
 def configure_logging(log_file: Path) -> None:
@@ -49,6 +56,8 @@ def load_app_icon(app: QApplication) -> QIcon:
 
 
 def main() -> int:
+    args = parse_args(sys.argv[1:])
+
     app = QApplication(sys.argv)
     app.setApplicationName("Pripominacek")
     app.setQuitOnLastWindowClosed(False)
@@ -85,7 +94,8 @@ def main() -> int:
     tray.set_paused(settings.paused)
     tray.show()
 
-    main_window.show_main_window()
+    if not args.autostart:
+        main_window.show_main_window()
 
     exit_code = app.exec()
     tray.hide()

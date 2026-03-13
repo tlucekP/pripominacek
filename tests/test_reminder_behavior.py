@@ -1,8 +1,12 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 import unittest
+from unittest.mock import patch
 
+from app.autostart import AUTOSTART_ARGUMENT, AutostartManager
+from app.main import parse_args
 from app.main_window import MainWindow
 from app.models import Reminder
 from app.reminder_dialog import ReminderPopupDialog
@@ -131,6 +135,24 @@ class ReminderBehaviorTests(unittest.TestCase):
 
         self.assertFalse(reminder.enabled)
         self.assertIsNone(reminder.snooze_until)
+
+    def test_parse_args_detects_autostart_launch(self) -> None:
+        args = parse_args([AUTOSTART_ARGUMENT])
+
+        self.assertTrue(args.autostart)
+
+    def test_autostart_command_for_frozen_app_starts_hidden(self) -> None:
+        manager = AutostartManager()
+        fake_exe = Path(r"D:\Apps\Pripominacek.exe")
+
+        with patch("app.autostart.sys.executable", str(fake_exe)), patch(
+            "app.autostart.sys.frozen",
+            True,
+            create=True,
+        ):
+            command = manager.build_command()
+
+        self.assertEqual(f'"{fake_exe}" {AUTOSTART_ARGUMENT}', command)
 
 
 if __name__ == "__main__":

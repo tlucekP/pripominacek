@@ -13,6 +13,7 @@ LOGGER = logging.getLogger(__name__)
 
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE_NAME = "Pripominacek"
+AUTOSTART_ARGUMENT = "--autostart"
 
 
 class AutostartManager:
@@ -25,26 +26,38 @@ class AutostartManager:
     def build_command(self) -> str:
         if getattr(sys, "frozen", False):
             exe_path = Path(sys.executable).resolve()
-            return f'"{exe_path}"'
+            return f'"{exe_path}" {AUTOSTART_ARGUMENT}'
 
         python_exe = Path(sys.executable).resolve()
         main_script = (Path(__file__).resolve().parent / "main.py").resolve()
-        return f'"{python_exe}" "{main_script}"'
+        return f'"{python_exe}" "{main_script}" {AUTOSTART_ARGUMENT}'
 
     def is_enabled(self) -> bool:
+        current_command = self.get_command()
+        return bool(current_command and current_command.strip())
+
+    def get_command(self) -> str | None:
         if not self.is_supported():
-            return False
+            return None
 
         assert winreg is not None
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
                 value, _ = winreg.QueryValueEx(key, self.value_name)
-            return isinstance(value, str) and bool(value.strip())
+            if isinstance(value, str):
+                return value
+            return None
         except FileNotFoundError:
-            return False
+            return None
         except OSError:
             LOGGER.exception("Nepodarilo se precist autostart z registru.")
+            return None
+
+    def is_current_command(self) -> bool:
+        current_command = self.get_command()
+        if not current_command:
             return False
+        return current_command.strip() == self.build_command()
 
     def set_enabled(self, enabled: bool) -> bool:
         if not self.is_supported():
